@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"time"
 
+	"github.com/crewjam/saml"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -21,52 +23,64 @@ import (
 )
 
 func getMetadata(ctx context.Context, url, tokenSigningKeyThumbprint, currentMetadata string) (string, error) {
-	// Download the metadata document.
-	client := http.DefaultClient
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return "", err
-	}
-	if res.StatusCode < 200 || res.StatusCode >= 400 {
-		return "", fmt.Errorf("response failed with status code %d and body: %s", res.StatusCode, body)
-	}
-	// Find the signing key that has the tokenSigningKeyThumbprint thumbprint.
-	metadata, err := samlsp.ParseMetadata(body)
-	if err != nil {
-		return "", err
-	}
-	foundTokenSigningKey := false
 	expectedThumbprint, err := hex.DecodeString(tokenSigningKeyThumbprint)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode tokenSigningKeyThumbprint: %w", err)
 	}
-	for _, d := range metadata.IDPSSODescriptors {
-		for _, kd := range d.KeyDescriptors {
-			if kd.Use == "signing" {
-				for _, c := range kd.KeyInfo.X509Data.X509Certificates {
-					b, err := base64.StdEncoding.DecodeString(c.Data)
-					if err != nil {
-						continue
-					}
-					thumbprint := sha1.Sum(b)
-					if bytes.Equal(thumbprint[:], expectedThumbprint) {
-						foundTokenSigningKey = true
+	// Download the metadata document.
+	const timeout = 10 * time.Minute
+	const delay = 10 * time.Second
+	var metadata *saml.EntityDescriptor
+	var metadataDocument []byte
+	client := http.DefaultClient
+	for i := 0; i < int(timeout/delay); i++ {
+		metadata = nil
+		metadataDocument = nil
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return "", err
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer res.Body.Close()
+		metadataDocument, err = io.ReadAll(res.Body)
+		if err != nil {
+			return "", err
+		}
+		if res.StatusCode < 200 || res.StatusCode >= 400 {
+			return "", fmt.Errorf("response failed with status code %d and body: %s", res.StatusCode, metadataDocument)
+		}
+		// Find the signing key that has the tokenSigningKeyThumbprint thumbprint.
+		metadata, err = samlsp.ParseMetadata(metadataDocument)
+		if err != nil {
+			return "", err
+		}
+		foundTokenSigningKey := false
+		for _, d := range metadata.IDPSSODescriptors {
+			for _, kd := range d.KeyDescriptors {
+				if kd.Use == "signing" {
+					for _, c := range kd.KeyInfo.X509Data.X509Certificates {
+						b, err := base64.StdEncoding.DecodeString(c.Data)
+						if err != nil {
+							continue
+						}
+						thumbprint := sha1.Sum(b)
+						if bytes.Equal(thumbprint[:], expectedThumbprint) {
+							foundTokenSigningKey = true
+						}
 					}
 				}
 			}
 		}
+		if foundTokenSigningKey {
+			break
+		}
+		time.Sleep(delay)
 	}
-	if !foundTokenSigningKey {
-		return "", fmt.Errorf("could not find the token signing key")
+	if metadata == nil || metadataDocument == nil {
+		return "", fmt.Errorf("timed out waiting for the token signing key to be available in the metadata document")
 	}
 	// Return the current metadata when they only differ by their signature.
 	// NB this is required because each time we request a metadata document from
@@ -91,7 +105,7 @@ func getMetadata(ctx context.Context, url, tokenSigningKeyThumbprint, currentMet
 			return currentMetadata, nil
 		}
 	}
-	return string(body), nil
+	return string(metadataDocument), nil
 }
 
 // Ensure the implementation satisfies the expected interfaces.
