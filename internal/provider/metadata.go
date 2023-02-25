@@ -20,7 +20,7 @@ import (
 func getMetadata(ctx context.Context, url, tokenSigningKeyThumbprint, currentMetadata string) (string, error) {
 	// Download the metadata document.
 	client := http.DefaultClient
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
