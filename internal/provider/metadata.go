@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 
 	"github.com/crewjam/saml/samlsp"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -120,12 +123,24 @@ func (r *metadataResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 		Description: "Caches an SAML IDP Metadata document.",
 		Attributes: map[string]schema.Attribute{
 			"url": schema.StringAttribute{
-				Description: "SAML IDP Metadata document URL.",
+				Description: "SAML IDP Metadata document HTTP URL.",
 				Required:    true,
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(
+						regexp.MustCompile(`^https?://`),
+						"must be an http url",
+					),
+				},
 			},
 			"token_signing_key_thumbprint": schema.StringAttribute{
-				Description: "Token signing key thumbprint.",
+				Description: "Token signing key thumbprint (hexadecimal encoded SHA1).",
 				Required:    true,
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(
+						regexp.MustCompile(`^[a-fA-F0-9]{40}$`),
+						"must be an hexadecimal encoded sha1",
+					),
+				},
 			},
 			"document": schema.StringAttribute{
 				Description: "The SAML IDP Metadata document.",
